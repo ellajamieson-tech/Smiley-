@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smiley Face Emotions</title>
+    
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Load Teachable Machine Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+    
+    <style>
+        /* Custom transition for the mouth shape */
+        #mouth {
+            transition: all 0.3s ease-in-out;
+        }
+
+        /* Confetti Animation */
+        @keyframes confetti-fall {
+            0% {
+                transform: translate(0, 0) rotate(0deg);
+                opacity: 1;
+            }
+            100% {
+                /* Animate to the random x/y offsets defined in JS */
+                transform: translate(var(--x, 0px), var(--y, 0px)) rotate(720deg);
+                opacity: 0;
+            }
+        }
+
+        .confetti-piece {
+            position: absolute;
+            background-color: var(--color);
+            width: var(--size);
+            height: var(--size);
+            border-radius: 50%;
+            animation: confetti-fall var(--duration) ease-out forwards;
+            animation-delay: var(--delay);
+            /* z-index is set by the container's Tailwind class (z-[5]) */
+        }
+
+        /* Tears Animation */
+        @keyframes tear-drop {
+            0% {
+                transform: translateY(0) scale(0.8);
+                opacity: 0;
+            }
+            20% {
+                opacity: 1;
+            }
+            100% {
+                transform: translateY(60px) scale(0.8);
+                opacity: 0;
+            }
+        }
+
+        .tear {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            background-color: #add8e6; /* Light blue */
+            border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+            opacity: 0;
+            animation: tear-drop 1.5s ease-out infinite;
+            transform-origin: center top;
+            /* z-index is set by the element's Tailwind class (z-[15]) */
+        }
+
+        /* Adjust individual tear positions and delays */
+        .tear-left-1 { top: 45%; left: 28%; animation-delay: 0s; }
+        .tear-left-2 { top: 48%; left: 32%; animation-delay: 0.5s; }
+        .tear-right-1 { top: 45%; right: 28%; animation-delay: 0.2s; }
+        .tear-right-2 { top: 48%; right: 32%; animation-delay: 0.7s; }
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen font-sans">
+
+    <div class="flex flex-col items-center p-6 space-y-8">
+        
+        <h1 class="text-3xl font-bold text-gray-800">Emotion Controller</h1>
+        <p class="text-gray-600">Show the webcam an arrow to change the emotion!</p>
+
+        <!-- Main content area -->
+        <div class="flex flex-col md:flex-row items-center gap-8">
+            
+            <!-- Webcam -->
+            <div class="text-center">
+                <h2 class="text-xl font-semibold mb-2 text-gray-700">Webcam Input</h2>
+                <div id="webcam-container" class="w-64 h-64 sm:w-80 sm:h-80 rounded-lg overflow-hidden shadow-lg bg-gray-300">
+                    <!-- Webcam canvas will be inserted here by JS -->
+                </div>
+            </div>
+
+            <!-- Smiley Face -->
+            <div class="text-center">
+                <h2 class="text-xl font-semibold mb-2 text-gray-700">Smiley's Reaction</h2>
+                <!-- 
+                  Face Container: 
+                  - Must be 'relative' to position children.
+                  - Must NOT have 'overflow-hidden' so confetti can escape.
+                  - z-index is default (0), so confetti (z-5) is above it.
+                -->
+                <div id="face" class="relative w-64 h-64 sm:w-80 sm:h-80 bg-yellow-400 rounded-full shadow-xl flex items-center justify-center transition-all duration-300">
+                    
+                    <!-- Confetti Container: z-index 5 (above face, below eyes/mouth) -->
+                    <div id="confetti-container" class="absolute inset-0 pointer-events-none z-[5]"></div>
+
+                    <!-- Eyes: z-index 10 (above confetti) -->
+                    <div class="absolute top-1/4 left-1/4 w-10 h-10 sm:w-12 sm:h-12 bg-black rounded-full shadow-inner z-[10]"></div>
+                    <div class="absolute top-1/4 right-1/4 w-10 h-10 sm:w-12 sm:h-12 bg-black rounded-full shadow-inner z-[10]"></div>
+
+                    <!-- Tears: z-index 15 (above everything) -->
+                    <div class="tear tear-left-1 z-[15]" style="animation-play-state: paused;"></div>
+                    <div class="tear tear-left-2 z-[15]" style="animation-play-state: paused;"></div>
+                    <div class="tear tear-right-1 z-[15]" style="animation-play-state: paused;"></div>
+                    <div class="tear tear-right-2 z-[15]" style="animation-play-state: paused;"></div>
+
+                    <!-- Mouth: z-index 10 (added in JS) -->
+                    <div id="mouth" class="absolute"></div>
+
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const face = document.getElementById('face');
+            const mouth = document.getElementById('mouth');
+            const confettiContainer = document.getElementById('confetti-container');
+            const tears = document.querySelectorAll('.tear');
+
+            let currentEmotion = 'neutral'; // <-- ADDED: State variable
+
+            // --- Define the class lists for each emotion state ---
+            
+            // Base classes for the mouth (common to all states)
+            // Added z-[10] to ensure it's above the confetti (z-[5])
+            const mouthBaseClasses = ['absolute', 'left-1/2', '-translate-x-1/2', 'transition-all', 'duration-300', 'z-[10]'];
+            
+            // Classes for the NEUTRAL mouth (a straight line)
+            const mouthNeutralClasses = ['w-32', 'h-3', 'sm:w-40', 'sm:h-4', 'bg-black', 'rounded-full', 'bottom-24', 'sm:bottom-28'];
+            
+            // Classes for the HAPPY mouth (a smile)
+            const mouthHappyClasses = ['w-36', 'h-20', 'sm:w-44', 'sm:h-24', 'border-b-8', 'border-l-8', 'border-r-8', 'border-black', 'rounded-b-full', 'bottom-20', 'sm:bottom-24', 'bg-transparent'];
+            
+            // Classes for the SAD mouth (a frown)
+            const mouthSadClasses = ['w-36', 'h-20', 'sm:w-44', 'sm:h-24', 'border-t-8', 'border-l-8', 'border-r-8', 'border-black', 'rounded-t-full', 'bottom-24', 'sm:bottom-28', 'bg-transparent'];
+
+            // --- Helper Functions to change emotion ---
+
+            function clearEffects() {
+                stopCrying();
+                clearConfetti();
+            }
+
+            function setHappy() {
+                if (currentEmotion === 'happy') return; // <-- ADDED: Prevent re-running
+                currentEmotion = 'happy'; // <-- ADDED: Set state
+                clearEffects();
+                mouth.classList.remove(...mouthNeutralClasses, ...mouthSadClasses);
+                mouth.classList.add(...mouthHappyClasses);
+                face.classList.remove('bg-yellow-400', 'bg-blue-300');
+                face.classList.add('bg-yellow-300');
+                createConfetti();
+            }
+
+            function setSad() {
+                if (currentEmotion === 'sad') return; // <-- ADDED: Prevent re-running
+                currentEmotion = 'sad'; // <-- ADDED: Set state
+                clearEffects();
+                mouth.classList.remove(...mouthNeutralClasses, ...mouthHappyClasses);
+                mouth.classList.add(...mouthSadClasses);
+                face.classList.remove('bg-yellow-400', 'bg-yellow-300');
+                face.classList.add('bg-blue-300');
+                startCrying();
+            }
+
+            function setNeutral() {
+                if (currentEmotion === 'neutral') return; // <-- ADDED: Prevent re-running
+                currentEmotion = 'neutral'; // <-- ADDED: Set state
+                clearEffects();
+                mouth.classList.remove(...mouthHappyClasses, ...mouthSadClasses);
+                mouth.classList.add(...mouthNeutralClasses);
+                face.classList.remove('bg-yellow-300', 'bg-blue-300');
+                face.classList.add('bg-yellow-400');
+            }
+
+            // --- Confetti Functions ---
+            const confettiColors = [
+                '#f06', '#9cff2e', '#8a2be2', '#ffeb3b', '#00bcd4', '#ff9800',
+                '#e91e63', '#4caf50', '#9c27b0', '#ffc107', '#2196f3', '#ff5722',
+                '#00ff00', '#00ffff', '#ff00ff'
+            ];
+
+            function createConfetti() {
+                const numConfetti = 80;
+                for (let i = 0; i < numConfetti; i++) {
+                    const confetti = document.createElement('div');
+                    confetti.classList.add('confetti-piece');
+                    
+                    const size = Math.random() * 10 + 6 + 'px'; // 6-16px
+                    const color = confettiColors[Math.floor(Math.random() * confettiColors.length)];
+                    const xOffset = (Math.random() - 0.5) * 400 + 'px'; // -200px to 200px (wide spread)
+                    const yOffset = (Math.random() - 0.5) * 300 + 'px'; // -150px to 150px (explodes up and down)
+                    const duration = Math.random() * 2 + 2 + 's'; // 2s to 4s
+                    const delay = Math.random() * 1 + 's'; // 0s to 1s delay
+
+                    // Set CSS variables for the animation
+                    confetti.style.setProperty('--size', size);
+                    confetti.style.setProperty('--color', color);
+                    confetti.style.setProperty('--x', xOffset);
+                    confetti.style.setProperty('--y', yOffset);
+                    confetti.style.setProperty('--duration', duration);
+                    confetti.style.setProperty('--delay', delay);
+                    
+                    // Start from the center of the face
+                    confetti.style.left = '50%'; 
+                    confetti.style.top = '50%'; 
+                    confetti.style.transform = 'translate(-50%, -50%)'; 
+                    
+                    confettiContainer.appendChild(confetti);
+
+                    // Remove confetti after animation to prevent DOM clutter
+                    confetti.addEventListener('animationend', () => {
+                        confetti.remove();
+                    });
+                }
+            }
+
+            function clearConfetti() {
+                confettiContainer.innerHTML = ''; // Remove all confetti pieces
+            }
+
+            // --- Crying Functions ---
+            function startCrying() {
+                tears.forEach(tear => {
+                    tear.style.animationPlayState = 'running';
+                });
+            }
+
+            function stopCrying() {
+                tears.forEach(tear => {
+                    tear.style.animationPlayState = 'paused';
+                    tear.style.opacity = '0'; // Immediately hide if stopping mid-animation
+                });
+            }
+
+
+            // --- Teachable Machine Logic ---
+            const URL = "https://teachablemachine.withgoogle.com/models/Mbatfuiso/";
+            let model, webcam, maxPredictions;
+
+            async function init() {
+                const modelURL = URL + "model.json";
+                const metadataURL = URL + "metadata.json";
+
+                try {
+                    model = await tmImage.load(modelURL, metadataURL);
+                    maxPredictions = model.getTotalClasses();
+
+                    const flip = true;
+                    const webcamContainer = document.getElementById("webcam-container");
+                    const size = 320; // Use a consistent size
+                    webcam = new tmImage.Webcam(size, size, flip);
+                    await webcam.setup();
+                    await webcam.play();
+                    
+                    // Style the webcam canvas and add it to the container
+                    webcam.canvas.classList.add("w-full", "h-full", "object-cover");
+                    webcamContainer.innerHTML = ''; // Clear any error messages
+                    webcamContainer.appendChild(webcam.canvas);
+
+                    // Start the prediction loop
+                    window.requestAnimationFrame(loop);
+
+                } catch (e) {
+                    console.error("Error loading Teachable Machine model:", e);
+                    webcamContainer.innerHTML = "<p class='p-4 text-red-600'>Error loading model. Make sure the URL is correct and webcam is allowed.</p>";
+                }
+            }
+
+            async function loop() {
+                if (webcam && webcam.canvas) { // Check if webcam is initialized
+                    webcam.update(); // Update the webcam frame
+                    await predict(); // Run prediction
+                }
+                window.requestAnimationFrame(loop); // Loop again
+            }
+
+    
+            async function predict() {
+                // model.predict() returns an array of {className, probability}
+                const prediction = await model.predict(webcam.canvas);
+
+                let highestProb = 0.0;
+                let predictedClass = "";
+
+                // Find the class with the highest probability
+                for (let i = 0; i < maxPredictions; i++) {
+                    if (prediction[i].probability > highestProb) {
+                        highestProb = prediction[i].probability;
+                        predictedClass = prediction[i].className;
+                    }
+                }
+                
+                // Only change state if confidence is high (e.g., > 90%)
+                if (highestProb < 0.9) { 
+                    setNeutral(); // Call setNeutral (it will check its own state)
+                    return;
+                }
+
+                // Change emotion based on the predicted class
+                switch (predictedClass) {
+                    case "Arrow up":
+                        setHappy(); // Call setHappy (it will check its own state)
+                        break;
+                    case "Arrow down":
+                        setSad(); // Call setSad (it will check its own state)
+                        break;
+                    default:
+                        setNeutral(); // Call setNeutral (it will check its own state)
+                        break;
+                }
+            }
+
+            // --- Initial State ---
+            mouth.classList.add(...mouthBaseClasses); // Apply base classes
+            setNeutral(); // Start in a neutral state
+
+            init(); // Initialize Teachable Machine
+        });
+    </script>
+
+</body>
+</html>
